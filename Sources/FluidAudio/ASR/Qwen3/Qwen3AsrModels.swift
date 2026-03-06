@@ -4,6 +4,27 @@ import OSLog
 
 private let logger = Logger(subsystem: "FluidAudio", category: "Qwen3AsrModels")
 
+private func float16ToFloat32(_ bits: UInt16) -> Float {
+    let sign = UInt32(bits >> 15) << 31
+    let exp  = UInt32((bits >> 10) & 0x1F)
+    let mant = UInt32(bits & 0x3FF)
+    let f32bits: UInt32
+    if exp == 0 {
+        if mant == 0 { f32bits = sign }
+        else {
+            var e: UInt32 = 127 - 14
+            var m = mant
+            while (m & 0x400) == 0 { m <<= 1; e -= 1 }
+            f32bits = sign | ((e) << 23) | ((m & 0x3FF) << 13)
+        }
+    } else if exp == 31 {
+        f32bits = sign | 0x7F800000 | (mant << 13)
+    } else {
+        f32bits = sign | ((exp + 127 - 15) << 23) | (mant << 13)
+    }
+    return Float(bitPattern: f32bits)
+}
+
 /// Qwen3-ASR model variant (precision).
 public enum Qwen3AsrVariant: String, CaseIterable, Sendable {
     /// Full precision (FP16 weights). Best speed, ~1.75 GB.
@@ -306,11 +327,11 @@ public final class EmbeddingWeights: Sendable {
 
         #if arch(arm64)
         data.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
-            let f16Ptr = ptr.baseAddress!.advanced(by: offset)
-                .assumingMemoryBound(to: Float16.self)
+            let u16Ptr = ptr.baseAddress!.advanced(by: offset)
+                .assumingMemoryBound(to: UInt16.self)
 
             for i in 0..<hiddenSize {
-                result[i] = Float(f16Ptr[i])
+                result[i] = float16ToFloat32(u16Ptr[i])
             }
         }
         #else
